@@ -1,153 +1,333 @@
 # Auto Firmware Dumper Workflow - Advanced Version
 # Developed by: jisan ff <ffjisan804@gmail.com>
-# new account by: frnwot <frnbuid2005@gmail.com>
+# New account by: frnwot <frnbuid2005@gmail.com>
+#
+# Developer Info Inputs added:
+# - USER_NAME: Your GitHub username (e.g. "frnwot)
+# - USER_EMAIL: Your GitHub email (e.g. "frnbuid2005@gmail.com")
+# - DEVELOPER_URL: Your developer profile or Twitter (optional, e.g. "https://github.com/frnwot")
+#
+# Example usage via GitHub Actions workflow_dispatch UI or API:
+#
+# workflow_dispatch:
+#   inputs:
+#     USER_NAME: 'frnwot'
+#     USER_EMAIL: 'frnbuid2005@gmail.com'
+#     DEVELOPER_URL: 'https://github.com/frnwot'
+#     FIRMWARE_URL: 'https://example.com/stockrom.zip'
+#     GENERATE_VENDOR: true
+#     UPLOAD_LINEAGE_DT: false
+#     UPLOAD_TWRP_DT: true
+#     USE_GENERIC_DUMPER_REPO: true
 
 name: Auto Firmware Dumper
-description: >
-  GitHub Actions workflow to automate dumping firmware,
-  generating LineageOS/TWRP/Vendor device trees, and pushing them to GitHub.
 
 on:
   workflow_dispatch:
     inputs:
       USER_NAME:
-        description: 'Your GitHub account name'
+        description: 'Name in GitHub Account'
         required: true
+        default: ''
       USER_EMAIL:
-        description: 'Your GitHub email address'
+        description: 'E-mail in GitHub Account'
         required: true
+        default: ''
+      DEVELOPER_URL:
+        description: 'Developer URL or Twitter (optional)'
+        required: false
+        default: ''
       FIRMWARE_URL:
-        description: 'Direct URL to the Stock ROM firmware zip'
+        description: 'Stock ROM Link'
         required: true
+        default: ''
       GENERATE_VENDOR:
-        description: 'Whether to generate vendor tree'
+        description: 'Create Vendor Tree'
+        required: true
+        default: 'false'
         type: boolean
-        default: false
       UPLOAD_LINEAGE_DT:
         description: 'Upload LineageOS device tree'
+        required: true
+        default: 'false'
         type: boolean
-        default: false
       UPLOAD_TWRP_DT:
         description: 'Upload TWRP device tree'
+        required: true
+        default: 'false'
         type: boolean
-        default: false
+      USE_GENERIC_DUMPER_REPO:
+        description: 'Use generic dumper repo updater?'
+        required: true
+        default: 'false'
+        type: boolean
 
 jobs:
-  firmware-dumper:
-    name: Firmware Dumper & Tree Generator
-    runs-on: ubuntu-latest
+  dump:
+    name: Auto Firmware Dumper
     if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.GTOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GTOKEN }}
+      TWT: ${{ github.event.inputs.UPLOAD_TWRP_DT }}
+      LOT: ${{ github.event.inputs.UPLOAD_LINEAGE_DT }}
+      GVT: ${{ github.event.inputs.GENERATE_VENDOR }}
+      FUR: ${{ github.event.inputs.FIRMWARE_URL }}
+      UN: ${{ github.event.inputs.USER_NAME }}
+      UEM: ${{ github.event.inputs.USER_EMAIL }}
+      DEV_URL: ${{ github.event.inputs.DEVELOPER_URL }}
+      USE_GEN_REPO: ${{ github.event.inputs.USE_GENERIC_DUMPER_REPO }}
     permissions:
       contents: write
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: |
-          sudo apt update && sudo apt install -y \
-            git curl unzip aria2 cpio tar gzip neofetch python3-pip
-          pip3 install --upgrade aospdtgen twrpdtgen
+    - name: Cleanup workspace
+      uses: rokibhasansagar/slimhub_actions@main
 
-      - name: Configure Git & Authenticate GitHub CLI
-        run: |
-          echo "${GH_TOKEN}" | gh auth login --with-token
-          gh auth setup-git
-          git config --global user.name "${{ github.event.inputs.USER_NAME }}"
-          git config --global user.email "${{ github.event.inputs.USER_EMAIL }}"
+    - name: Update packages and install dependencies
+      run: |
+        sudo apt update && sudo apt -y upgrade
+        sudo apt install -y cpio aria2 git python3 python3-pip neofetch tar gzip curl
 
-      - name: Clone DumprX and Setup
-        run: |
-          mkdir -p /home/Auto-Dumper && cd /home/Auto-Dumper
-          git clone https://github.com/DumprX/DumprX
-          cd DumprX
-          chmod +x *.sh && bash setup.sh
+    - name: Install GitHub CLI
+      run: |
+        type -p gh >/dev/null || (
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install -y gh
+        )
 
-      - name: Run DumperX
-        run: |
-          cd /home/Auto-Dumper/DumprX
-          sudo bash dumper.sh "${{ github.event.inputs.FIRMWARE_URL }}"
+    - name: Clone and Setup DumprX
+      run: |
+        mkdir -p /home/runner/Auto-Dumper
+        cd /home/runner/Auto-Dumper
+        rm -rf DumprX
+        git clone https://github.com/DumprX/DumprX
+        cd DumprX
+        chmod +x *.sh
+        bash setup.sh
+        pip3 install --quiet --upgrade aospdtgen twrpdtgen
 
-      - name: Extract Build Metadata
-        run: |
-          cd /home/Auto-Dumper/DumprX/out
-          chmod -R 777 *
-          codename=$(grep -m1 -s 'ro.product.device=' build.prop || echo unknown)
-          brand=$(grep -m1 -s 'ro.product.brand=' build.prop || echo unknown)
-          version=$(grep -m1 -s 'ro.build.version.release_or_codename=' build.prop || echo unknown)
-          fingerprint=$(grep -m1 -s 'ro.system.build.fingerprint=' build.prop || echo unknown)
-          echo "$codename" > /home/Auto-Dumper/codename.txt
-          echo "$brand" > /home/Auto-Dumper/brand.txt
-          echo "$version" > /home/Auto-Dumper/version.txt
-          echo "$fingerprint" > /home/Auto-Dumper/fingerprint.txt
+    - name: Create firmware dump
+      run: |
+        cd /home/runner/Auto-Dumper/DumprX
+        bash dumper.sh "$FUR"
+        chmod -R 777 out
 
-      - name: Create Git Repo for Firmware Dump
-        run: |
-          cd /home/Auto-Dumper/DumprX/out
-          codename=$(cat /home/Auto-Dumper/codename.txt)
-          brand=$(cat /home/Auto-Dumper/brand.txt | tr 'A-Z' 'a-z')
-          repo_name="dump_${brand}_${codename}"
+    - name: Configure Git and authenticate GitHub CLI
+      run: |
+        git config --global user.name "$UN"
+        git config --global user.email "$UEM"
+        echo "${{ secrets.GTOKEN }}" | gh auth login --with-token
+
+    - name: Process dump output and extract device info
+      run: |
+        cd /home/runner/Auto-Dumper/DumprX/out
+
+        # Check dump success
+        if [ ! -d system ]; then
+          echo "Dump failed - 'system' folder missing."
+          exit 1
+        fi
+
+        # Extract codename and brand
+        cd system || cd vendor || exit 1
+
+        codename=$(grep -m1 -E "ro.product.vendor.device|ro.vendor.product.device|ro.product.device" build.prop | cut -d= -f2 | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+        brand=$(grep -m1 -E "ro.product.vendor.brand|ro.vendor.product.brand|ro.product.brand" build.prop | cut -d= -f2 | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+
+        if [ -z "$codename" ] || [ -z "$brand" ]; then
+          echo "Could not determine codename or brand."
+          exit 1
+        fi
+
+        echo "$codename" > /home/runner/Auto-Dumper/codename.txt
+        echo "$brand" > /home/runner/Auto-Dumper/brand.txt
+
+        # Extract version and fingerprint for use later
+        version=$(grep -m1 "ro.build.version.release_or_codename=" build.prop | cut -d= -f2)
+        fingerprint=$(grep -m1 "ro.system.build.fingerprint=" build.prop | cut -d= -f2)
+
+        echo "$version" > /home/runner/Auto-Dumper/version.txt
+        echo "$fingerprint" > /home/runner/Auto-Dumper/fingerprint.txt
+
+        cd /home/runner/Auto-Dumper/DumprX/out
+
+        # Compress large images
+        max_size=48000000
+        for img in recovery.img boot.img vendor_boot.img init_boot.img dtbo.img dtb.img; do
+          if [ -f "$img" ]; then
+            size=$(stat -c%s "$img")
+            if [ "$size" -gt "$max_size" ]; then
+              cp "$img" /home/runner/Auto-Dumper/
+              gzip -f "$img"
+            fi
+          fi
+        done
+
+        # Remove files larger than 50MB
+        find . -type f -size +50M -exec echo "Deleting large file: {}" \; -delete
+
+    - name: Prepare and push dump repository
+      run: |
+        cd /home/runner/Auto-Dumper/DumprX/out
+        git init
+        codename=$(cat /home/runner/Auto-Dumper/codename.txt)
+        brand=$(cat /home/runner/Auto-Dumper/brand.txt)
+        dat=$(date +%Y%m%d)
+        branch="dump-${codename}-${dat}"
+
+        git checkout -b "$branch"
+        git add .
+        git commit -s -m "Dump for $brand $codename"
+
+        # Create and push repo using gh CLI with debug info
+        description="Dump for $brand $codename - Generated by $UN"
+        if [ -n "$DEV_URL" ]; then
+          description="$description | Developer: $DEV_URL"
+        fi
+
+        gh repo create "dump_${brand}_${codename}" --public --description="$description" --source=. --remote=origin --push --confirm --debug
+
+    - name: Prepare vendor project structure
+      run: |
+        cd /home/runner/Auto-Dumper
+        mkdir -p vnd_project/android/device/$(cat brand.txt)/$(cat codename.txt)
+        mkdir -p vnd_project/dump
+
+        # Move lineage-device-tree if exists
+        if [ -d DumprX/out/lineage-device-tree ]; then
+          mv DumprX/out/lineage-device-tree/* vnd_project/android/device/$(cat brand.txt)/$(cat codename.txt)
+          rm -rf DumprX/out/lineage-device-tree
+        else
+          echo "Lineage device tree not found."
+        fi
+
+        # Move all dump files
+        mv DumprX/out/* vnd_project/dump || echo "No files to move from out."
+
+    - name: Create vendor tree (if requested)
+      if: env.GVT == 'true'
+      run: |
+        cd /home/runner/Auto-Dumper/vnd_project
+        brand=$(cat ../brand.txt)
+        codename=$(cat ../codename.txt)
+
+        if [ ! -d android/device/$brand/$codename ]; then
+          echo "LineageOS device tree not found at android/device/$brand/$codename"
+          exit 1
+        fi
+
+        echo "Cloning LineageOS tools for extraction..."
+        git clone --depth=1 https://github.com/LineageOS/android_tools_extract-utils -b lineage-20.0 android/tools/extract-utils
+        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_extract-tools -b lineage-20.0 android/prebuilts/extract-tools
+
+        chmod +x android/device/$brand/$codename/setup-makefiles.sh android/device/$brand/$codename/extract-files.sh
+        bash android/device/$brand/$codename/extract-files.sh dump/
+
+        echo "Vendor tree extraction complete."
+
+    - name: Upload vendor tree (if requested)
+      if: env.GVT == 'true'
+      run: |
+        cd /home/runner/Auto-Dumper/vnd_project/android/vendor/$(cat ../../brand.txt)/$(cat ../../codename.txt)
+        chmod -R 777 .
+
+        codename=$(cat ../../../codename.txt)
+        dat=$(date +%Y%m%d)
+        git init
+        git checkout -b vendor-"$codename"-"$dat"
+        git add .
+        git commit -s -m "$codename : initial vendor tree"
+        gh repo create android_vendor_"$(cat ../../../brand.txt)"_"$codename" --public --description="Vendor tree for $codename" --source=. --remote=origin --push --confirm
+        echo "Vendor tree upload successful."
+
+        cd /home/runner/Auto-Dumper
+        rm -rf DumprX vnd_project
+
+    - name: Upload LineageOS device tree (if requested)
+      if: env.LOT == 'true'
+      run: |
+        cd /home/runner/Auto-Dumper/lineage-device-tree
+        codename=$(cat ../codename.txt)
+        dat=$(date +%Y%m%d)
+        git init
+        git checkout -b lineage-"$codename"-"$dat"
+        git add .
+        git commit -s -m "$codename : LineageOS compatible device tree"
+        gh repo create lineage_device_"$(cat ../brand.txt)"_"$codename" --public --description="LineageOS compatible tree for $codename" --source=. --remote=origin --push --confirm
+
+    - name: Upload TWRP device tree (if requested)
+      if: env.TWT == 'true'
+      run: |
+        cd /home/runner/Auto-Dumper/twrp-device-tree/$(cat ../brand.txt)/$(cat ../codename.txt)
+        codename=$(cat ../../codename.txt)
+        version=$(cat ../../version.txt)
+        dat=$(date +%Y%m%d)
+
+        # Fix directory in case BoardConfig.mk not in this dir
+        if [ ! -f BoardConfig.mk ]; then
+          cd */*
+        fi
+
+        git init
+        git checkout -b twrp-"$version"-"$dat"
+        git add .
+        git commit -s -m "$codename : TWRP compatible device tree"
+        gh repo create twrp_device_"$(cat ../../brand.txt)"_"$codename" --public --description="TWRP compatible tree for $codename" --source=. --remote=origin --push --confirm
+
+    - name: Upload preview images as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Preview images
+        path: |
+          /home/runner/Auto-Dumper/boot.img
+          /home/runner/Auto-Dumper/recovery.img
+          /home/runner/Auto-Dumper/vendor_boot.img
+          /home/runner/Auto-Dumper/init_boot.img
+          /home/runner/Auto-Dumper/dtbo.img
+          /home/runner/Auto-Dumper/dtb.img
+        if-no-files-found: ignore
+
+    - name: Generic dumper repo rename and push (optional)
+      if: env.USE_GEN_REPO == 'true'
+      run: |
+        codename=$(cat /home/runner/Auto-Dumper/codename.txt)
+        brand=$(cat /home/runner/Auto-Dumper/brand.txt)
+        dat=$(date +%Y%m%d)
+        repo_name="dump_${brand}_${codename}"
+
+        # Try to find existing dumper repos owned by user with prefix dump_
+        echo "Searching for existing dumper repos owned by $UN ..."
+        repos=$(gh repo list "$UN" --limit 100 --json name --jq '.[] | select(.name | startswith("dump_")) | .name')
+
+        if echo "$repos" | grep -q "$repo_name"; then
+          echo "Repo $repo_name found. Cloning and updating..."
+          rm -rf /home/runner/repo_update
+          gh repo clone "$UN/$repo_name" /home/runner/repo_update
+          cd /home/runner/repo_update
+          git checkout main || git checkout master || git checkout -b main
+          cp -r /home/runner/Auto-Dumper/DumprX/out/* .
+          git add .
+          git commit -s -m "Update dump for $brand $codename on $dat" || echo "No changes to commit"
+          git push origin HEAD
+          echo "Repo updated successfully."
+        else
+          echo "Repo $repo_name not found. Creating new repo and pushing..."
+          mkdir -p /home/runner/repo_update
+          cp -r /home/runner/Auto-Dumper/DumprX/out/* /home/runner/repo_update
+          cd /home/runner/repo_update
           git init
-          git add . && git commit -m "Initial firmware dump for $codename"
-          gh repo view "$repo_name" || gh repo create "$repo_name" --public --source=. --remote=origin --push --description="Firmware Dump for $codename"
-
-      - name: Generate Vendor Tree (Conditional)
-        if: inputs.GENERATE_VENDOR == true
-        run: |
-          cd /home/Auto-Dumper
-          codename=$(cat codename.txt)
-          brand=$(cat brand.txt | tr 'A-Z' 'a-z')
-          mkdir -p vnd_project/android/device/$brand/$codename
-          mv DumprX/out/lineage-device-tree/* vnd_project/android/device/$brand/$codename || echo "No Lineage tree"
-          mv DumprX/out/* vnd_project/
-          git clone --depth=1 https://github.com/LineageOS/android_tools_extract-utils -b lineage-20.0 vnd_project/android/tools/extract-utils
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_extract-tools -b lineage-20.0 vnd_project/android/prebuilts/extract-tools
-          chmod +x vnd_project/android/device/$brand/$codename/*.sh || true
-          cd vnd_project/android/device/$brand/$codename
-          bash extract-files.sh /home/Auto-Dumper/vnd_project/dump/
-
-      - name: Upload Vendor Tree
-        if: inputs.GENERATE_VENDOR == true
-        run: |
-          cd /home/Auto-Dumper/vnd_project/android/vendor
-          codename=$(cat /home/Auto-Dumper/codename.txt)
-          brand=$(cat /home/Auto-Dumper/brand.txt | tr 'A-Z' 'a-z')
-          repo="android_vendor_${brand}_${codename}"
-          git init && git add . && git commit -m "Initial vendor tree for $codename"
-          gh repo view "$repo" || gh repo create "$repo" --public --source=. --remote=origin --push --description="Vendor tree for $codename"
-
-      - name: Upload LineageOS Tree
-        if: inputs.UPLOAD_LINEAGE_DT == true
-        run: |
-          cd /home/Auto-Dumper/lineage-device-tree
-          codename=$(cat /home/Auto-Dumper/codename.txt)
-          brand=$(cat /home/Auto-Dumper/brand.txt | tr 'A-Z' 'a-z')
-          repo="lineage_device_${brand}_${codename}"
-          git init && git add . && git commit -m "LineageOS tree for $codename"
-          gh repo view "$repo" || gh repo create "$repo" --public --source=. --remote=origin --push --description="LineageOS tree for $codename"
-
-      - name: Upload TWRP Tree
-        if: inputs.UPLOAD_TWRP_DT == true
-        run: |
-          cd /home/Auto-Dumper/twrp-device-tree
-          codename=$(cat /home/Auto-Dumper/codename.txt)
-          brand=$(cat /home/Auto-Dumper/brand.txt | tr 'A-Z' 'a-z')
-          version=$(cat /home/Auto-Dumper/version.txt)
-          repo="twrp_device_${brand}_${codename}"
-          [ -d $brand/$codename ] && cd $brand/$codename || cd .
-          git init && git add . && git commit -m "TWRP tree for $codename"
-          gh repo view "$repo" || gh repo create "$repo" --public --source=. --remote=origin --push --description="TWRP tree for $codename"
-
-      - name: Upload Boot Image Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Preview Images
-          path: |
-            /home/Auto-Dumper/boot.img
-            /home/Auto-Dumper/recovery.img
-            /home/Auto-Dumper/vendor_boot.img
-            /home/Auto-Dumper/init_boot.img
-            /home/Auto-Dumper/dtbo.img
-            /home/Auto-Dumper/dtb.img
+          git checkout -b main
+          git config user.name "$UN"
+          git config user.email "$UEM"
+          git add .
+          git commit -s -m "Initial dump for $brand $codename on $dat"
+          gh repo create "$repo_name" --public --description="Dump for $brand $codename created by $UN" --source=. --remote=origin --push --confirm
+          echo "Repo created and pushed successfully."
+        fi
