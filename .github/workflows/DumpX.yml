@@ -102,7 +102,7 @@ jobs:
         mkdir -p ~/Auto-Dumper
         cd ~/Auto-Dumper
         rm -rf DumprX
-        git clone https://github.com/frnwot/DumprX
+        git clone https://github.com/DumprX/DumprX
         cd DumprX
         chmod +x *.sh
         bash setup.sh
